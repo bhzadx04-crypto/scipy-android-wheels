@@ -174,19 +174,23 @@ jobs:
 
           cat "$RUNNER_TEMP/android.ini"
 
-      - name: Build SciPy
+      - name: Clone SciPy
         shell: bash
-        working-directory: scipy
         run: |
           set -eux
 
-          mkdir -p "$GITHUB_WORKSPACE/wheelhouse"
+          git clone \
+            --depth 1 \
+            --branch "v${SCIPY_VERSION}" \
+            https://github.com/scipy/scipy.git
 
-          python -m pip wheel \
-            . \
-            --no-deps \
-            --wheel-dir "$GITHUB_WORKSPACE/wheelhouse" \
-            -v
+          cd scipy
+
+          git submodule update --init --recursive
+
+          git submodule status
+
+          test -d subprojects/xsf
 
       - name: Show result
         shell: bash
