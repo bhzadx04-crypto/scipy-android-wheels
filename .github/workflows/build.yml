@@ -2,40 +2,25 @@ name: Build SciPy Android ARM64
 
 on:
   workflow_dispatch:
-    inputs:
-      scipy_version:
-        description: "SciPy version"
-        required: true
-        default: "1.17.1"
-
-      android_api:
-        description: "Android API level"
-        required: true
-        default: "24"
 
 jobs:
   build:
     runs-on: ubuntu-24.04
-    timeout-minutes: 180
 
     env:
-      SCIPY_VERSION: ${{ inputs.scipy_version || '1.17.1' }}
-      ANDROID_API: ${{ inputs.android_api || '24' }}
+      SCIPY_VERSION: "1.17.1"
+      ANDROID_API: "24"
       NDK_VERSION: "27.2.12479018"
 
     steps:
-
       - name: Checkout
         uses: actions/checkout@v4
 
-      # --------------------------------------------------
-      # Android SDK / NDK
-      # --------------------------------------------------
-
-      - name: Setup Android SDK
+      - name: Setup Android
         uses: android-actions/setup-android@v3
 
-      - name: Install Android NDK
+      - name: Install NDK
+        shell: bash
         run: |
           set -eux
 
@@ -47,12 +32,11 @@ jobs:
 
           echo "ANDROID_NDK=$NDK" >> "$GITHUB_ENV"
 
-      # --------------------------------------------------
-      # System dependencies
-      # --------------------------------------------------
-
-      - name: Install dependencies
+      - name: Install system dependencies
+        shell: bash
         run: |
+          set -eux
+
           sudo apt-get update
 
           sudo apt-get install -y \
@@ -64,25 +48,13 @@ jobs:
             ninja-build \
             cmake \
             pkg-config \
-            gfortran \
-            python3 \
-            python3-dev \
-            python3-venv \
-            libopenblas-dev \
-            liblapack-dev
-
-      # --------------------------------------------------
-      # uv
-      # --------------------------------------------------
+            gfortran
 
       - name: Setup uv
         uses: astral-sh/setup-uv@v6
 
-      # --------------------------------------------------
-      # Python 3.13
-      # --------------------------------------------------
-
-      - name: Setup Python 3.13
+      - name: Setup Python
+        shell: bash
         run: |
           set -eux
 
@@ -94,19 +66,15 @@ jobs:
 
           echo "$RUNNER_TEMP/venv/bin" >> "$GITHUB_PATH"
 
-          python --version
-
-      # --------------------------------------------------
-      # Python build dependencies
-      # --------------------------------------------------
+          "$RUNNER_TEMP/venv/bin/python" --version
 
       - name: Install Python dependencies
+        shell: bash
         run: |
           set -eux
 
           uv pip install \
             --python "$RUNNER_TEMP/venv/bin/python" \
-            -U \
             pip \
             setuptools \
             wheel \
@@ -117,11 +85,8 @@ jobs:
             pybind11 \
             pythran
 
-      # --------------------------------------------------
-      # SciPy
-      # --------------------------------------------------
-
       - name: Clone SciPy
+        shell: bash
         run: |
           set -eux
 
@@ -130,57 +95,26 @@ jobs:
             --branch "v${SCIPY_VERSION}" \
             https://github.com/scipy/scipy.git
 
-          cd scipy
-
-          git rev-parse HEAD
-
-      # --------------------------------------------------
-      # Android toolchain
-      # --------------------------------------------------
-
       - name: Configure Android toolchain
         shell: bash
         run: |
-          set -euxo pipefail
-
-          echo "================================"
-          echo "Android configuration"
-          echo "================================"
-
-          echo "SDK:  $ANDROID_SDK_ROOT"
-          echo "NDK:  $ANDROID_NDK"
-          echo "API:  $ANDROID_API"
+          set -eux
 
           TOOLCHAIN="$ANDROID_NDK/toolchains/llvm/prebuilt/linux-x86_64/bin"
 
           test -d "$TOOLCHAIN"
 
-          echo
-          echo "Toolchain:"
-          ls -la "$TOOLCHAIN" | head -50
-
           CC="$TOOLCHAIN/clang"
           CXX="$TOOLCHAIN/clang++"
-          AR="$TOOLCHAIN/llvm-ar"
-          RANLIB="$TOOLCHAIN/llvm-ranlib"
-          STRIP="$TOOLCHAIN/llvm-strip"
 
           test -x "$CC"
           test -x "$CXX"
-          test -x "$AR"
-          test -x "$RANLIB"
-          test -x "$STRIP"
 
           echo "CC=$CC" >> "$GITHUB_ENV"
           echo "CXX=$CXX" >> "$GITHUB_ENV"
-          echo "AR=$AR" >> "$GITHUB_ENV"
-          echo "RANLIB=$RANLIB" >> "$GITHUB_ENV"
-          echo "STRIP=$STRIP" >> "$GITHUB_ENV"
+          echo "AR=$TOOLCHAIN/llvm-ar" >> "$GITHUB_ENV"
+          echo "RANLIB=$TOOLCHAIN/llvm-ranlib" >> "$GITHUB_ENV"
 
-          echo "ANDROID_TARGET=aarch64-linux-android" >> "$GITHUB_ENV"
-
-          echo
-          echo "Compiler:"
           "$CC" \
             --target="aarch64-linux-android${ANDROID_API}" \
             --version
@@ -189,14 +123,10 @@ jobs:
             --target="aarch64-linux-android${ANDROID_API}" \
             --version
 
-      # --------------------------------------------------
-      # Test Android compiler
-      # --------------------------------------------------
-
       - name: Test Android compiler
         shell: bash
         run: |
-          set -euxo pipefail
+          set -eux
 
           cat > "$RUNNER_TEMP/test.c" <<'EOF'
           int main(void) {
@@ -211,8 +141,67 @@ jobs:
 
           file "$RUNNER_TEMP/test"
 
-      # --------------------------------------------------
-      # Meson cross file
-      # --------------------------------------------------
+      - name: Create Meson cross file
+        shell: bash
+        run: |
+          set -eux
 
-      - name: Create
+          TOOLCHAIN="$ANDROID_NDK/toolchains/llvm/prebuilt/linux-x86_64/bin"
+
+          cat > "$RUNNER_TEMP/android.ini" <<EOF
+          [binaries]
+          c = '$TOOLCHAIN/clang'
+          cpp = '$TOOLCHAIN/clang++'
+          ar = '$TOOLCHAIN/llvm-ar'
+          strip = '$TOOLCHAIN/llvm-strip'
+          ranlib = '$TOOLCHAIN/llvm-ranlib'
+
+          [built-in options]
+          c_args = ['--target=aarch64-linux-android${ANDROID_API}']
+          cpp_args = ['--target=aarch64-linux-android${ANDROID_API}']
+          c_link_args = ['--target=aarch64-linux-android${ANDROID_API}']
+          cpp_link_args = ['--target=aarch64-linux-android${ANDROID_API}']
+
+          [host_machine]
+          system = 'android'
+          cpu_family = 'aarch64'
+          cpu = 'armv8-a'
+          endian = 'little'
+
+          [properties]
+          needs_exe_wrapper = true
+          EOF
+
+          cat "$RUNNER_TEMP/android.ini"
+
+      - name: Build SciPy
+        shell: bash
+        working-directory: scipy
+        run: |
+          set -eux
+
+          mkdir -p "$GITHUB_WORKSPACE/wheelhouse"
+
+          python -m pip wheel \
+            . \
+            --no-deps \
+            --wheel-dir "$GITHUB_WORKSPACE/wheelhouse" \
+            -v
+
+      - name: Show result
+        shell: bash
+        run: |
+          set -eux
+
+          ls -lah wheelhouse
+
+          find wheelhouse \
+            -name "*.whl" \
+            -exec unzip -p {} '*/WHEEL' \;
+
+      - name: Upload wheel
+        uses: actions/upload-artifact@v4
+        with:
+          name: scipy-${{ env.SCIPY_VERSION }}-cp313-android-arm64
+          path: wheelhouse/*.whl
+          if-no-files-found: error
