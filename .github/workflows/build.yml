@@ -102,6 +102,14 @@ jobs:
       - name: Configure Android toolchain
         run: |
           export NDK="$ANDROID_NDK"
+          export TOOLCHAIN="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin"
 
-          echo "CC=$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android${ANDROID_API}-clang" >> "$GITHUB_ENV"
-          echo "CXX=$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android
+          echo "CC=$TOOLCHAIN/aarch64-linux-android${ANDROID_API}-clang" >> "$GITHUB_ENV"
+          echo "CXX=$TOOLCHAIN/aarch64-linux-android${ANDROID_API}-clang++" >> "$GITHUB_ENV"
+          echo "AR=$TOOLCHAIN/llvm-ar" >> "$GITHUB_ENV"
+          echo "RANLIB=$TOOLCHAIN/llvm-ranlib" >> "$GITHUB_ENV"
+
+          echo "TARGET=aarch64-linux-android" >> "$GITHUB_ENV"
+
+          echo "CC=$TOOLCHAIN/aarch64-linux-android${ANDROID_API}-clang"
+          echo "CXX=$TOOLCHAIN/aarch64-linux-android${ANDROID_API}-clang++"
