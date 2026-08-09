@@ -6,6 +6,7 @@ on:
 jobs:
   build:
     runs-on: ubuntu-24.04
+    timeout-minutes: 180
 
     env:
       SCIPY_VERSION: "1.17.1"
@@ -16,10 +17,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Android
+      - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Install NDK
+      - name: Install Android NDK
         shell: bash
         run: |
           set -eux
@@ -53,7 +54,7 @@ jobs:
       - name: Setup uv
         uses: astral-sh/setup-uv@v6
 
-      - name: Setup Python
+      - name: Setup Python 3.13
         shell: bash
         run: |
           set -eux
@@ -68,7 +69,7 @@ jobs:
 
           "$RUNNER_TEMP/venv/bin/python" --version
 
-      - name: Install Python dependencies
+      - name: Install Python build dependencies
         shell: bash
         run: |
           set -eux
@@ -95,10 +96,19 @@ jobs:
             --branch "v${SCIPY_VERSION}" \
             https://github.com/scipy/scipy.git
 
+          cd scipy
+
+          git submodule update --init --recursive
+
+          echo "=== Submodules ==="
+          git submodule status
+
+          test -d subprojects/xsf
+
       - name: Configure Android toolchain
         shell: bash
         run: |
-          set -eux
+          set -euxo pipefail
 
           TOOLCHAIN="$ANDROID_NDK/toolchains/llvm/prebuilt/linux-x86_64/bin"
 
@@ -114,6 +124,9 @@ jobs:
           echo "CXX=$CXX" >> "$GITHUB_ENV"
           echo "AR=$TOOLCHAIN/llvm-ar" >> "$GITHUB_ENV"
           echo "RANLIB=$TOOLCHAIN/llvm-ranlib" >> "$GITHUB_ENV"
+          echo "STRIP=$TOOLCHAIN/llvm-strip" >> "$GITHUB_ENV"
+
+          echo "ANDROID_TARGET=aarch64-linux-android" >> "$GITHUB_ENV"
 
           "$CC" \
             --target="aarch64-linux-android${ANDROID_API}" \
@@ -148,7 +161,7 @@ jobs:
 
           TOOLCHAIN="$ANDROID_NDK/toolchains/llvm/prebuilt/linux-x86_64/bin"
 
-          cat > "$RUNNER_TEMP/android.ini" <<EOF
+          cat > "$RUNNER_TEMP/android-aarch64.ini" <<EOF
           [binaries]
           c = '$TOOLCHAIN/clang'
           cpp = '$TOOLCHAIN/clang++'
@@ -159,6 +172,7 @@ jobs:
           [built-in options]
           c_args = ['--target=aarch64-linux-android${ANDROID_API}']
           cpp_args = ['--target=aarch64-linux-android${ANDROID_API}']
+
           c_link_args = ['--target=aarch64-linux-android${ANDROID_API}']
           cpp_link_args = ['--target=aarch64-linux-android${ANDROID_API}']
 
@@ -172,36 +186,56 @@ jobs:
           needs_exe_wrapper = true
           EOF
 
-          cat "$RUNNER_TEMP/android.ini"
+          cat "$RUNNER_TEMP/android-aarch64.ini"
 
-      - name: Clone SciPy
+      - name: Build SciPy wheel
+        working-directory: scipy
         shell: bash
+        env:
+          MESON_ARGS: "--cross-file $RUNNER_TEMP/android-aarch64.ini"
         run: |
           set -eux
 
-          git clone \
-            --depth 1 \
-            --branch "v${SCIPY_VERSION}" \
-            https://github.com/scipy/scipy.git
+          mkdir -p "$GITHUB_WORKSPACE/wheelhouse"
 
-          cd scipy
+          python -m pip wheel \
+            . \
+            --no-deps \
+            --wheel-dir "$GITHUB_WORKSPACE/wheelhouse" \
+            --config-settings=setup-args="--cross-file=$RUNNER_TEMP/android-aarch64.ini" \
+            -v
 
-          git submodule update --init --recursive
-
-          git submodule status
-
-          test -d subprojects/xsf
-
-      - name: Show result
+      - name: Inspect wheel
         shell: bash
         run: |
           set -eux
 
           ls -lah wheelhouse
 
-          find wheelhouse \
-            -name "*.whl" \
-            -exec unzip -p {} '*/WHEEL' \;
+          WHEEL="$(find wheelhouse -name '*.whl' -type f | head -n 1)"
+
+          test -n "$WHEEL"
+
+          echo "================================"
+          echo "Wheel:"
+          echo "$WHEEL"
+          echo "================================"
+
+          echo
+          echo "WHEEL metadata:"
+          unzip -p "$WHEEL" '*/WHEEL' || true
+
+          echo
+          echo "Native libraries:"
+          mkdir -p "$RUNNER_TEMP/wheel-check"
+
+          unzip -q "$WHEEL" \
+            -d "$RUNNER_TEMP/wheel-check"
+
+          find "$RUNNER_TEMP/wheel-check" \
+            -type f \
+            -name "*.so" \
+            -exec file {} \; || true
 
       - name: Upload wheel
         uses: actions/upload-artifact@v4
@@ -209,3 +243,4 @@ jobs:
           name: scipy-${{ env.SCIPY_VERSION }}-cp313-android-arm64
           path: wheelhouse/*.whl
           if-no-files-found: error
+          retention-days: 30
